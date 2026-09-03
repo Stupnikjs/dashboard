@@ -28,20 +28,40 @@ def main():
 
     data = get_data()
 
-    cols = st.columns(2)
-    for i, entry in enumerate(watchlist):
-        df = data[entry.ticker]
-        with cols[i % 2]:
-            if df is None:
-                st.error(f"{entry.ticker} : échec de récupération")
-                continue
-            weekly_df = resample_weekly(df)
-            fig = build_chart(
-                weekly_df, entry.label or entry.ticker,
-                show_sma=show_sma, show_bollinger=show_bollinger, show_rsi=show_rsi,
-            )
-            st.plotly_chart(fig, use_container_width=True)
-            st.caption(f"Dernière donnée : {df.index.max().date()}")
+    if "page_idx" not in st.session_state:
+        st.session_state.page_idx = 0
+
+    labels = [entry.label or entry.ticker for entry in watchlist]
+
+    col_prev, col_select, col_next = st.columns([1, 6, 1])
+    with col_prev:
+        if st.button("◀", use_container_width=True):
+            st.session_state.page_idx = (st.session_state.page_idx - 1) % len(watchlist)
+    with col_select:
+        st.session_state.page_idx = st.selectbox(
+            "Actif", range(len(watchlist)),
+            index=st.session_state.page_idx,
+            format_func=lambda i: labels[i],
+            label_visibility="collapsed",
+        )
+    with col_next:
+        if st.button("▶", use_container_width=True):
+            st.session_state.page_idx = (st.session_state.page_idx + 1) % len(watchlist)
+
+    entry = watchlist[st.session_state.page_idx]
+    df = data[entry.ticker]
+
+    if df is None:
+        st.error(f"{entry.ticker} : échec de récupération")
+        return
+
+    weekly_df = resample_weekly(df)
+    fig = build_chart(
+        weekly_df, entry.label or entry.ticker,
+        show_sma=show_sma, show_bollinger=show_bollinger, show_rsi=show_rsi,
+    )
+    st.plotly_chart(fig, use_container_width=True)
+    st.caption(f"Dernière donnée : {df.index.max().date()}")
 
 if __name__ == "__main__":
     main()
