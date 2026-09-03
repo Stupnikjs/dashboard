@@ -14,34 +14,69 @@
 ################################################################################
 
 import streamlit as st
-from ..core.config import DATA_DIR, load_watchlist
-from ..storage.parquet_cache import ParquetCache
-from ..ingestion.yfinance_adapter import YFinanceAdapter
-from ..ingestion.updater import Updater
-from ..visualize.charts import build_candlestick
+from core.config import DATA_DIR, load_watchlist
+from storage.parquet_cache import ParquetCache
+from ingestion.yfinance_adapter import YFinanceAdapter
+from ingestion.updater import Updater
+from visualize.charts import build_chart, resample_weekly
 
 def main():
     st.set_page_config(layout="wide")
     st.title("Dashboard financier")
 
+    with st.sidebar:
+        st.header("Indicateurs")
+        show_sma = st.multiselect("SMA (semaines)", [10, 20, 50], default=[20])
+        show_bollinger = st.checkbox("Bandes de Bollinger", value=False)
+        show_rsi = st.checkbox("RSI", value=False)
+
     watchlist = load_watchlist()
+    tickers = [entry.ticker for entry in watchlist]
     updater = Updater(ParquetCache(DATA_DIR), YFinanceAdapter())
 
     @st.cache_data(ttl=3600)
     def get_data():
-        return updater.update_all(watchlist)
+        return updater.update_all(tickers)
 
     if st.button("🔄 Forcer le refresh"):
         get_data.clear()
 
     data = get_data()
 
-    cols = st.columns(2)
-    for i, symbol in enumerate(watchlist):
-        df = data[symbol]
-        with cols[i % 2]:
-            st.plotly_chart(build_candlestick(df, symbol), use_container_width=True)
-            st.caption(f"Dernière donnée : {df.index.max().date()}")
+    if "page_idx" not in st.session_state:
+        st.session_state.page_idx = 0
+
+    labels = [entry.label or entry.ticker for entry in watchlist]
+
+    col_prev, col_select, col_next = st.columns([1, 6, 1])
+    with col_prev:
+        if st.button("◀", use_container_width=True):
+            st.session_state.page_idx = (st.session_state.page_idx - 1) % len(watchlist)
+    with col_select:
+        st.session_state.page_idx = st.selectbox(
+            "Actif", range(len(watchlist)),
+            index=st.session_state.page_idx,
+            format_func=lambda i: labels[i],
+            label_visibility="collapsed",
+        )
+    with col_next:
+        if st.button("▶", use_container_width=True):
+            st.session_state.page_idx = (st.session_state.page_idx + 1) % len(watchlist)
+
+    entry = watchlist[st.session_state.page_idx]
+    df = data[entry.ticker]
+
+    if df is None:
+        st.error(f"{entry.ticker} : échec de récupération")
+        return
+
+    weekly_df = resample_weekly(df)
+    fig = build_chart(
+        weekly_df, entry.label or entry.ticker,
+        show_sma=show_sma, show_bollinger=show_bollinger, show_rsi=show_rsi,
+    )
+    st.plotly_chart(fig, use_container_width=True)
+    st.caption(f"Dernière donnée : {df.index.max().date()}")
 
 if __name__ == "__main__":
     main()
@@ -61,14 +96,68 @@ if __name__ == "__main__":
 ################################################################################
 
 from pathlib import Path
+from dataclasses import dataclass
 import json
 
 ROOT = Path(__file__).resolve().parents[2]
 DATA_DIR = ROOT / "data" / "ohlcv"
-WATCHLIST_PATH = DATA_DIR / "watchlist.json"
+WATCHLIST_PATH = ROOT / "watchlist.json"
 
-def load_watchlist() -> list[str]:
-    return json.loads(WATCHLIST_PATH.read_text())
+@dataclass(frozen=True)
+class WatchlistEntry:
+    ticker: str
+    label: str | None = None
+    asset_class: str | None = None
+
+def load_watchlist() -> list[WatchlistEntry]:
+    raw = json.loads(WATCHLIST_PATH.read_text())
+    return [WatchlistEntry(**entry) for entry in raw["watchlist"]]
+
+################################################################################
+# Dossier : src\indicators
+# Fichier : __init__.py
+# Chemin relatif : indicators\__init__.py
+################################################################################
+
+
+
+################################################################################
+# Dossier : src\indicators
+# Fichier : momentum.py
+# Chemin relatif : indicators\momentum.py
+################################################################################
+
+import pandas as pd
+
+def rsi(df: pd.DataFrame, window: int = 14, column: str = "close") -> pd.Series:
+    delta = df[column].diff()
+    gain = delta.clip(lower=0)
+    loss = -delta.clip(upper=0)
+    avg_gain = gain.rolling(window=window).mean()
+    avg_loss = loss.rolling(window=window).mean()
+    rs = avg_gain / avg_loss
+    return 100 - (100 / (1 + rs))
+
+################################################################################
+# Dossier : src\indicators
+# Fichier : trend.py
+# Chemin relatif : indicators\trend.py
+################################################################################
+
+import pandas as pd
+
+def sma(df: pd.DataFrame, window: int, column: str = "close") -> pd.Series:
+    return df[column].rolling(window=window).mean()
+
+def ema(df: pd.DataFrame, window: int, column: str = "close") -> pd.Series:
+    return df[column].ewm(span=window, adjust=False).mean()
+
+def bollinger_bands(df: pd.DataFrame, window: int = 20, num_std: float = 2, column: str = "close"):
+    mid = sma(df, window, column)
+    std = df[column].rolling(window=window).std()
+    upper = mid + num_std * std
+    lower = mid - num_std * std
+    return upper, mid, lower
 
 ################################################################################
 # Dossier : src\ingestion
@@ -98,35 +187,45 @@ class FetchAdapter(Protocol):
 # Chemin relatif : ingestion\updater.py
 ################################################################################
 
+import logging
 import pandas as pd
-from ..storage.base import Cache
+from storage.base import Cache
 from .base import FetchAdapter
+
+logger = logging.getLogger(__name__)
 
 class Updater:
     def __init__(self, cache: Cache, adapter: FetchAdapter):
         self.cache = cache
         self.adapter = adapter
 
-    def update_symbol(self, symbol: str) -> pd.DataFrame:
+    def update_symbol(self, symbol: str) -> pd.DataFrame | None:
         cached = self.cache.load(symbol)
 
-        if cached is not None and not cached.empty:
-            start = cached.index.max() + pd.Timedelta(days=1)
-            if start.date() > pd.Timestamp.today().date():
-                return cached
-            new_data = self.adapter.fetch(symbol, start)
-            if new_data.empty:
-                return cached
-            combined = pd.concat([cached, new_data])
-            combined = combined[~combined.index.duplicated(keep="last")].sort_index()
-        else:
-            combined = self.adapter.fetch(symbol, None)
+        try:
+            if cached is not None and not cached.empty:
+                start = cached.index.max() + pd.Timedelta(days=1)
+                if start.date() > pd.Timestamp.today().date():
+                    return cached
+                new_data = self.adapter.fetch(symbol, start)
+                if new_data.empty:
+                    return cached
+                combined = pd.concat([cached, new_data])
+                combined = combined[~combined.index.duplicated(keep="last")].sort_index()
+            else:
+                combined = self.adapter.fetch(symbol, None)
+                if combined.empty:
+                    logger.warning("Aucune donnée récupérée pour %s (ticker invalide ?)", symbol)
+                    return None
+        except Exception:
+            logger.exception("Échec de mise à jour pour %s, cache existant conservé", symbol)
+            return cached  # dégrade gracieusement plutôt que de planter tout le batch
 
         self.cache.save(symbol, combined)
         return combined
 
-    def update_all(self, watchlist: list[str]) -> dict[str, pd.DataFrame]:
-        return {s: self.update_symbol(s) for s in watchlist}
+    def update_all(self, tickers: list[str]) -> dict[str, pd.DataFrame | None]:
+        return {t: self.update_symbol(t) for t in tickers}
 
 ################################################################################
 # Dossier : src\ingestion
@@ -216,17 +315,61 @@ class ParquetCache(Cache):
 ################################################################################
 
 import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 import pandas as pd
+from indicators.trend import sma, bollinger_bands
+from indicators.momentum import rsi
 
-def build_candlestick(df: pd.DataFrame, symbol: str) -> go.Figure:
-    fig = go.Figure(data=[go.Candlestick(
+def resample_weekly(df: pd.DataFrame) -> pd.DataFrame:
+    return df.resample("W").agg({
+        "open": "first",
+        "high": "max",
+        "low": "min",
+        "close": "last",
+        "volume": "sum",
+    }).dropna()
+
+def build_chart(df: pd.DataFrame, symbol: str, show_sma: list[int] | None = None,
+                 show_bollinger: bool = False, show_rsi: bool = False) -> go.Figure:
+    rows = 2 if show_rsi else 1
+    row_heights = [0.7, 0.3] if show_rsi else [1.0]
+
+    fig = make_subplots(
+        rows=rows, cols=1, shared_xaxes=True,
+        row_heights=row_heights, vertical_spacing=0.05,
+    )
+
+    fig.add_trace(go.Candlestick(
         x=df.index, open=df["open"], high=df["high"],
         low=df["low"], close=df["close"], name=symbol
-    )])
+    ), row=1, col=1)
+
+    for window in (show_sma or []):
+        fig.add_trace(go.Scatter(
+            x=df.index, y=sma(df, window), name=f"SMA {window}",
+            line=dict(width=1),
+        ), row=1, col=1)
+
+    if show_bollinger:
+        upper, mid, lower = bollinger_bands(df)
+        for series, name in [(upper, "Bollinger haut"), (lower, "Bollinger bas")]:
+            fig.add_trace(go.Scatter(
+                x=df.index, y=series, name=name,
+                line=dict(width=1, dash="dot"), opacity=0.6,
+            ), row=1, col=1)
+
+    if show_rsi:
+        fig.add_trace(go.Scatter(
+            x=df.index, y=rsi(df), name="RSI",
+        ), row=2, col=1)
+        fig.add_hline(y=70, line_dash="dot", line_color="red", row=2, col=1)
+        fig.add_hline(y=30, line_dash="dot", line_color="green", row=2, col=1)
+
     fig.update_layout(
         title=symbol,
         xaxis_rangeslider_visible=False,
         margin=dict(l=20, r=20, t=40, b=20),
-        height=400,
+        height=400 if not show_rsi else 550,
+        showlegend=True,
     )
     return fig
