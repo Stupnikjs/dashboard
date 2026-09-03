@@ -1,5 +1,0 @@
-app
-core
-ingestion
-storage
-visualize

@@ -1,6 +1,0 @@
-pandas
-pyarrow
-plotly
-streamlit
-yfinance
-curl_cffi
