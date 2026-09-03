@@ -1,6 +1,33 @@
 import plotly.graph_objects as go
 import pandas as pd
 
+
+
+import plotly.graph_objects as go
+import pandas as pd
+
+def resample_weekly(df: pd.DataFrame) -> pd.DataFrame:
+    return df.resample("W").agg({
+        "open": "first",
+        "high": "max",
+        "low": "min",
+        "close": "last",
+        "volume": "sum",
+    }).dropna()
+
+def build_candlestick(df: pd.DataFrame, symbol: str) -> go.Figure:
+    fig = go.Figure(data=[go.Candlestick(
+        x=df.index, open=df["open"], high=df["high"],
+        low=df["low"], close=df["close"], name=symbol
+    )])
+    fig.update_layout(
+        title=symbol,
+        xaxis_rangeslider_visible=False,
+        margin=dict(l=20, r=20, t=40, b=20),
+        height=400,
+    )
+    return fig
+
 def build_candlestick(df: pd.DataFrame, symbol: str) -> go.Figure:
     fig = go.Figure(data=[go.Candlestick(
         x=df.index, open=df["open"], high=df["high"],

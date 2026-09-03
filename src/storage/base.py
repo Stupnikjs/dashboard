@@ -1,0 +1,6 @@
+from typing import Protocol
+import pandas as pd
+
+class Cache(Protocol):
+    def load(self, symbol: str) -> pd.DataFrame | None: ...
+    def save(self, symbol: str, df: pd.DataFrame) -> None: ...

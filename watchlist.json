@@ -1,0 +1,8 @@
+{
+  "watchlist": [
+     {"ticker": "BTC-USD", "label": "Bitcoin", "asset_class": "crypto"},
+    {"ticker": "SNY", "label": "Sanofi", "asset_class": "equity"},
+    {"ticker": "MDT", "label": "Medtronic", "asset_class": "equity"},
+    {"ticker": "NVO", "label": "Novo Nordisk", "asset_class": "equity"}
+  ]
+}

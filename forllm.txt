@@ -1,0 +1,232 @@
+
+################################################################################
+# Dossier : src\app
+# Fichier : __init__.py
+# Chemin relatif : app\__init__.py
+################################################################################
+
+
+
+################################################################################
+# Dossier : src\app
+# Fichier : streamlit_app.py
+# Chemin relatif : app\streamlit_app.py
+################################################################################
+
+import streamlit as st
+from ..core.config import DATA_DIR, load_watchlist
+from ..storage.parquet_cache import ParquetCache
+from ..ingestion.yfinance_adapter import YFinanceAdapter
+from ..ingestion.updater import Updater
+from ..visualize.charts import build_candlestick
+
+def main():
+    st.set_page_config(layout="wide")
+    st.title("Dashboard financier")
+
+    watchlist = load_watchlist()
+    updater = Updater(ParquetCache(DATA_DIR), YFinanceAdapter())
+
+    @st.cache_data(ttl=3600)
+    def get_data():
+        return updater.update_all(watchlist)
+
+    if st.button("🔄 Forcer le refresh"):
+        get_data.clear()
+
+    data = get_data()
+
+    cols = st.columns(2)
+    for i, symbol in enumerate(watchlist):
+        df = data[symbol]
+        with cols[i % 2]:
+            st.plotly_chart(build_candlestick(df, symbol), use_container_width=True)
+            st.caption(f"Dernière donnée : {df.index.max().date()}")
+
+if __name__ == "__main__":
+    main()
+
+################################################################################
+# Dossier : src\core
+# Fichier : __init__.py
+# Chemin relatif : core\__init__.py
+################################################################################
+
+
+
+################################################################################
+# Dossier : src\core
+# Fichier : config.py
+# Chemin relatif : core\config.py
+################################################################################
+
+from pathlib import Path
+import json
+
+ROOT = Path(__file__).resolve().parents[2]
+DATA_DIR = ROOT / "data" / "ohlcv"
+WATCHLIST_PATH = DATA_DIR / "watchlist.json"
+
+def load_watchlist() -> list[str]:
+    return json.loads(WATCHLIST_PATH.read_text())
+
+################################################################################
+# Dossier : src\ingestion
+# Fichier : __init__.py
+# Chemin relatif : ingestion\__init__.py
+################################################################################
+
+
+
+################################################################################
+# Dossier : src\ingestion
+# Fichier : base.py
+# Chemin relatif : ingestion\base.py
+################################################################################
+
+from typing import Protocol
+import pandas as pd
+
+class FetchAdapter(Protocol):
+    def fetch(self, symbol: str, start: pd.Timestamp | None) -> pd.DataFrame:
+        """Retourne un DataFrame OHLCV indexé par date, ou vide si rien de neuf."""
+        ...
+
+################################################################################
+# Dossier : src\ingestion
+# Fichier : updater.py
+# Chemin relatif : ingestion\updater.py
+################################################################################
+
+import pandas as pd
+from ..storage.base import Cache
+from .base import FetchAdapter
+
+class Updater:
+    def __init__(self, cache: Cache, adapter: FetchAdapter):
+        self.cache = cache
+        self.adapter = adapter
+
+    def update_symbol(self, symbol: str) -> pd.DataFrame:
+        cached = self.cache.load(symbol)
+
+        if cached is not None and not cached.empty:
+            start = cached.index.max() + pd.Timedelta(days=1)
+            if start.date() > pd.Timestamp.today().date():
+                return cached
+            new_data = self.adapter.fetch(symbol, start)
+            if new_data.empty:
+                return cached
+            combined = pd.concat([cached, new_data])
+            combined = combined[~combined.index.duplicated(keep="last")].sort_index()
+        else:
+            combined = self.adapter.fetch(symbol, None)
+
+        self.cache.save(symbol, combined)
+        return combined
+
+    def update_all(self, watchlist: list[str]) -> dict[str, pd.DataFrame]:
+        return {s: self.update_symbol(s) for s in watchlist}
+
+################################################################################
+# Dossier : src\ingestion
+# Fichier : yfinance_adapter.py
+# Chemin relatif : ingestion\yfinance_adapter.py
+################################################################################
+
+import yfinance as yf
+import pandas as pd
+from .base import FetchAdapter
+
+class YFinanceAdapter(FetchAdapter):
+    def fetch(self, symbol: str, start: pd.Timestamp | None) -> pd.DataFrame:
+        kwargs = {"interval": "1d"}
+        kwargs["start"] = start.strftime("%Y-%m-%d") if start else None
+        if start is None:
+            kwargs["period"] = "max"
+            kwargs.pop("start")
+
+        df = yf.Ticker(symbol).history(**kwargs)
+        if df.empty:
+            return df
+
+        df = df.rename(columns=str.lower)[["open", "high", "low", "close", "volume"]]
+        df.index.name = "date"
+        df.index = pd.to_datetime(df.index).tz_localize(None)
+        return df
+
+################################################################################
+# Dossier : src\storage
+# Fichier : __init__.py
+# Chemin relatif : storage\__init__.py
+################################################################################
+
+
+
+################################################################################
+# Dossier : src\storage
+# Fichier : base.py
+# Chemin relatif : storage\base.py
+################################################################################
+
+from typing import Protocol
+import pandas as pd
+
+class Cache(Protocol):
+    def load(self, symbol: str) -> pd.DataFrame | None: ...
+    def save(self, symbol: str, df: pd.DataFrame) -> None: ...
+
+################################################################################
+# Dossier : src\storage
+# Fichier : parquet_cache.py
+# Chemin relatif : storage\parquet_cache.py
+################################################################################
+
+from pathlib import Path
+import pandas as pd
+from .base import Cache
+
+class ParquetCache(Cache):
+    def __init__(self, data_dir: Path):
+        self.data_dir = data_dir
+
+    def _path(self, symbol: str) -> Path:
+        return self.data_dir / f"{symbol}.parquet"
+
+    def load(self, symbol: str) -> pd.DataFrame | None:
+        path = self._path(symbol)
+        return pd.read_parquet(path) if path.exists() else None
+
+    def save(self, symbol: str, df: pd.DataFrame) -> None:
+        self.data_dir.mkdir(parents=True, exist_ok=True)
+        df.to_parquet(self._path(symbol))
+
+################################################################################
+# Dossier : src\visualize
+# Fichier : __init__.py
+# Chemin relatif : visualize\__init__.py
+################################################################################
+
+
+
+################################################################################
+# Dossier : src\visualize
+# Fichier : charts.py
+# Chemin relatif : visualize\charts.py
+################################################################################
+
+import plotly.graph_objects as go
+import pandas as pd
+
+def build_candlestick(df: pd.DataFrame, symbol: str) -> go.Figure:
+    fig = go.Figure(data=[go.Candlestick(
+        x=df.index, open=df["open"], high=df["high"],
+        low=df["low"], close=df["close"], name=symbol
+    )])
+    fig.update_layout(
+        title=symbol,
+        xaxis_rangeslider_visible=False,
+        margin=dict(l=20, r=20, t=40, b=20),
+        height=400,
+    )
+    return fig
