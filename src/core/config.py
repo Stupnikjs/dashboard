@@ -3,7 +3,8 @@ from dataclasses import dataclass
 import json
 
 ROOT = Path(__file__).resolve().parents[2]
-DATA_DIR = ROOT / "data" / "ohlcv"
+PRICE_DIR = ROOT / "data" / "ohlcv"
+DATA_DIR = ROOT / "data"
 WATCHLIST_PATH = ROOT / "watchlist.json"
 
 @dataclass(frozen=True)

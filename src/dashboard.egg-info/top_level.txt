@@ -1,0 +1,6 @@
+app
+core
+indicators
+ingestion
+storage
+visualize

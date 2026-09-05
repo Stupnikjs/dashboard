@@ -1,16 +1,16 @@
 
 ################################################################################
-# Dossier : src\app
+# Dossier : src/app
 # Fichier : __init__.py
-# Chemin relatif : app\__init__.py
+# Chemin relatif : app/__init__.py
 ################################################################################
 
 
 
 ################################################################################
-# Dossier : src\app
+# Dossier : src/app
 # Fichier : streamlit_app.py
-# Chemin relatif : app\streamlit_app.py
+# Chemin relatif : app/streamlit_app.py
 ################################################################################
 
 import streamlit as st
@@ -82,17 +82,17 @@ if __name__ == "__main__":
     main()
 
 ################################################################################
-# Dossier : src\core
+# Dossier : src/core
 # Fichier : __init__.py
-# Chemin relatif : core\__init__.py
+# Chemin relatif : core/__init__.py
 ################################################################################
 
 
 
 ################################################################################
-# Dossier : src\core
+# Dossier : src/core
 # Fichier : config.py
-# Chemin relatif : core\config.py
+# Chemin relatif : core/config.py
 ################################################################################
 
 from pathlib import Path
@@ -100,7 +100,8 @@ from dataclasses import dataclass
 import json
 
 ROOT = Path(__file__).resolve().parents[2]
-DATA_DIR = ROOT / "data" / "ohlcv"
+PRICE_DIR = ROOT / "data" / "ohlcv"
+DATA_DIR = ROOT / "data"
 WATCHLIST_PATH = ROOT / "watchlist.json"
 
 @dataclass(frozen=True)
@@ -114,17 +115,100 @@ def load_watchlist() -> list[WatchlistEntry]:
     return [WatchlistEntry(**entry) for entry in raw["watchlist"]]
 
 ################################################################################
-# Dossier : src\indicators
+# Dossier : src/core
+# Fichier : filters.py
+# Chemin relatif : core/filters.py
+################################################################################
+
+"""
+src/core/filters.py
+
+Parsing des chaînes de filtre style CLI, partagé entre les différents
+points d'entrée (ex: screener.cli).
+"""
+
+import shlex
+
+
+def parse_filter_args(filter_str: str) -> dict:
+    """
+    Parse une chaîne de filtre style CLI.
+
+    Exemple : '-draw-down 40 -period 6month -direction min'
+    → {'draw_down': '40', 'period': '6month', 'direction': 'min'}
+
+    Flags booléens (sans valeur) sont aussi supportés : '-rsi' → {'rsi': True}
+    """
+    s = filter_str.strip()
+    if not s:
+        return {}
+    tokens = shlex.split(s)
+    result: dict = {}
+    i = 0
+    while i < len(tokens):
+        key = tokens[i].lstrip("-").replace("-", "_")
+        if i + 1 < len(tokens) and not tokens[i + 1].startswith("-"):
+            result[key] = tokens[i + 1]
+            i += 2
+        else:
+            result[key] = True
+            i += 1
+    return result
+
+################################################################################
+# Dossier : src/core
+# Fichier : periods.py
+# Chemin relatif : core/periods.py
+################################################################################
+
+import re
+import pandas as pd
+
+_SHORT = {"d": "day", "w": "week", "m": "month", "y": "year"}
+_PATTERN = re.compile(r"^(\d+)\s*([a-zA-Z]+)$")
+
+def parse_period(period: str) -> pd.DateOffset:
+    """
+    Convertit une chaîne en pd.DateOffset.
+    Exemples acceptés : '6month', '6m', '1year', '1y', '52week', '3d', '90day'
+    """
+    if not period:
+        raise ValueError("Période vide")
+    s = period.strip().lower().rstrip("s")  # tolère le pluriel
+
+    m = _PATTERN.match(s)
+    if not m:
+        raise ValueError(
+            f"Période invalide : {period!r}. "
+            "Exemples valides : '6month', '6m', '1year', '52week', '3d'"
+        )
+    n = int(m.group(1))
+    unit_raw = m.group(2)
+    unit = _SHORT.get(unit_raw, unit_raw)
+
+    mapping = {
+        "day": "days",
+        "week": "weeks",
+        "month": "months",
+        "year": "years",
+    }
+    if unit not in mapping:
+        raise ValueError(f"Unité inconnue : {unit_raw!r}")
+
+    return pd.DateOffset(**{mapping[unit]: n})
+
+################################################################################
+# Dossier : src/indicators
 # Fichier : __init__.py
-# Chemin relatif : indicators\__init__.py
+# Chemin relatif : indicators/__init__.py
 ################################################################################
 
 
 
 ################################################################################
-# Dossier : src\indicators
+# Dossier : src/indicators
 # Fichier : momentum.py
-# Chemin relatif : indicators\momentum.py
+# Chemin relatif : indicators/momentum.py
 ################################################################################
 
 import pandas as pd
@@ -139,9 +223,32 @@ def rsi(df: pd.DataFrame, window: int = 14, column: str = "close") -> pd.Series:
     return 100 - (100 / (1 + rs))
 
 ################################################################################
-# Dossier : src\indicators
+# Dossier : src/indicators
+# Fichier : perf.py
+# Chemin relatif : indicators/perf.py
+################################################################################
+
+import pandas as pd
+
+def drawdown(df: pd.DataFrame, column: str = "close") -> pd.Series:
+    """
+    Série de drawdown en % (valeurs négatives ou nulles).
+    drawdown(t) = (price(t) - running_max(t)) / running_max(t) * 100
+    """
+    price = df[column]
+    running_max = price.cummax()
+    return (price - running_max) / running_max * 100
+
+def max_drawdown(df: pd.DataFrame, column: str = "close") -> float:
+    """Drawdown maximum sur la période du DataFrame (en %, négatif)."""
+    if df.empty:
+        return 0.0
+    return float(drawdown(df, column).min())
+
+################################################################################
+# Dossier : src/indicators
 # Fichier : trend.py
-# Chemin relatif : indicators\trend.py
+# Chemin relatif : indicators/trend.py
 ################################################################################
 
 import pandas as pd
@@ -160,17 +267,17 @@ def bollinger_bands(df: pd.DataFrame, window: int = 20, num_std: float = 2, colu
     return upper, mid, lower
 
 ################################################################################
-# Dossier : src\ingestion
+# Dossier : src/ingestion
 # Fichier : __init__.py
-# Chemin relatif : ingestion\__init__.py
+# Chemin relatif : ingestion/__init__.py
 ################################################################################
 
 
 
 ################################################################################
-# Dossier : src\ingestion
+# Dossier : src/ingestion
 # Fichier : base.py
-# Chemin relatif : ingestion\base.py
+# Chemin relatif : ingestion/base.py
 ################################################################################
 
 from typing import Protocol
@@ -182,9 +289,9 @@ class FetchAdapter(Protocol):
         ...
 
 ################################################################################
-# Dossier : src\ingestion
+# Dossier : src/ingestion
 # Fichier : updater.py
-# Chemin relatif : ingestion\updater.py
+# Chemin relatif : ingestion/updater.py
 ################################################################################
 
 import logging
@@ -228,9 +335,9 @@ class Updater:
         return {t: self.update_symbol(t) for t in tickers}
 
 ################################################################################
-# Dossier : src\ingestion
+# Dossier : src/ingestion
 # Fichier : yfinance_adapter.py
-# Chemin relatif : ingestion\yfinance_adapter.py
+# Chemin relatif : ingestion/yfinance_adapter.py
 ################################################################################
 
 import yfinance as yf
@@ -255,17 +362,304 @@ class YFinanceAdapter(FetchAdapter):
         return df
 
 ################################################################################
-# Dossier : src\storage
+# Dossier : src/screener
 # Fichier : __init__.py
-# Chemin relatif : storage\__init__.py
+# Chemin relatif : screener/__init__.py
 ################################################################################
 
 
 
 ################################################################################
-# Dossier : src\storage
+# Dossier : src/screener
+# Fichier : cli.py
+# Chemin relatif : screener/cli.py
+################################################################################
+
+"""
+src/screener/cli.py
+
+Screener d'opportunités : scanne un univers d'instruments (indépendant de
+la watchlist du portefeuille, voir `screener.universe`), liste ceux en
+drawdown sur une période donnée, et exporte les lignes retenues dans un
+CSV au même format que le CSV d'entrée.
+
+Usage :
+    python -m screener.cli -csv instruments.csv -draw-down 40 -period 6month
+    → exporte par défaut vers down40over6m.csv
+    python -m screener.cli -csv instruments.csv -draw-down 40 -period 6month -out opportunites.csv
+"""
+from __future__ import annotations
+
+import re
+import sys
+import time
+from pathlib import Path
+
+import pandas as pd
+
+from core.filters import parse_filter_args
+from core.config import ROOT, DATA_DIR
+from core.periods import parse_period
+from storage.parquet_cache import ParquetCache
+from ingestion.updater import Updater
+from ingestion.yfinance_adapter import YFinanceAdapter
+from indicators.perf import drawdown, max_drawdown
+
+from .universe import load_universe_csv, COLUMNS
+
+# Cache dédié au screener, séparé de data/ohlcv (watchlist du portefeuille) :
+# les instruments scannés ici n'ont rien à voir avec ceux détenus.
+CACHE_DIR = ROOT / "data" / "cache_screen"
+
+# Extrait (nombre, unité) d'une période style '6month'/'6m'/'1year' pour
+# construire un nom de fichier abrégé (ex: '6month' -> '6m').
+_PERIOD_PATTERN = re.compile(r"^(\d+)\s*([a-zA-Z]+)$")
+
+
+def _abbreviate_period(period: str) -> str:
+    s = period.strip().lower().rstrip("s")
+    m = _PERIOD_PATTERN.match(s)
+    if not m:
+        return period
+    n, unit = m.group(1), m.group(2)
+    return f"{n}{unit[0]}"
+
+
+def _default_out_path(threshold: float, period: str) -> str:
+    threshold_str = str(int(threshold)) if threshold.is_integer() else str(threshold).replace(".", "_")
+    return f"down{threshold_str}over{_abbreviate_period(period)}.csv"
+
+
+# Anti rate-limit Yahoo : un scan complet interroge potentiellement des
+# centaines de tickers d'affilée, ce qui déclenche des échecs en cascade
+# ("possibly delisted; no timezone found") même sur des tickers valides.
+_REQUEST_DELAY_S = 0.3
+
+# XTB ajoute parfois un chiffre pour désambiguïser un ticker en collision
+# avec un autre instrument de son catalogue (ex: 'IBE1.MC' pour Iberdrola,
+# 'DOC1' pour Healthpeak) ; le ticker Yahoo réel est la version sans ce
+# chiffre, avant le suffixe de place éventuel. Fallback tenté uniquement si
+# le premier essai ne renvoie rien.
+_TRAILING_DIGIT = re.compile(r"\d+$")
+
+
+def _strip_disambiguation_digit(ticker: str) -> str:
+    base, sep, suffix = ticker.rpartition(".")
+    if not sep:
+        base, suffix = ticker, ""
+    stripped_base = _TRAILING_DIGIT.sub("", base)
+    return f"{stripped_base}.{suffix}" if sep else stripped_base
+
+
+def _fetch_with_fallback(updater: Updater, yahoo_ticker: str):
+    df = updater.update_symbol(yahoo_ticker)
+    if df is not None and not df.empty:
+        return df
+
+    stripped = _strip_disambiguation_digit(yahoo_ticker)
+    if stripped != yahoo_ticker:
+        time.sleep(_REQUEST_DELAY_S)
+        return updater.update_symbol(stripped)
+
+    return df
+
+
+def _screen(csv_path: str, threshold: float, period: str) -> tuple[list[dict], pd.DataFrame]:
+    """Retourne (lignes pour l'affichage console, sous-DataFrame de l'univers
+    d'origine -- mêmes colonnes que le CSV d'entrée -- pour les instruments
+    retenus)."""
+    universe = load_universe_csv(Path(DATA_DIR, csv_path))
+    updater = Updater(ParquetCache(CACHE_DIR), YFinanceAdapter())
+    cutoff = pd.Timestamp.today().normalize() - parse_period(period)
+
+    display_rows = []
+    matched_index = []
+
+    for row in universe.itertuples():
+        df = _fetch_with_fallback(updater, row.yahoo_ticker)
+        time.sleep(_REQUEST_DELAY_S)
+        if df is None or df.empty:
+            continue
+
+        df_period = df[df.index >= cutoff]
+        if df_period.empty:
+            continue
+
+        current_dd = float(drawdown(df_period).iloc[-1])
+        if abs(current_dd) < threshold:
+            continue
+
+        display_rows.append({
+            "ticker": row.yahoo_ticker,
+            "label": row.label,
+            "current_drawdown": current_dd,
+            "max_drawdown": max_drawdown(df_period),
+        })
+        matched_index.append(row.Index)
+
+    display_rows.sort(key=lambda r: r["current_drawdown"])  # pire en premier
+    matched_df = universe.loc[matched_index, COLUMNS]
+    return display_rows, matched_df
+
+
+def main() -> None:
+    filter_str = " ".join(sys.argv[1:])
+    args = parse_filter_args(filter_str)
+
+    csv_path = args.get("csv")
+    if not csv_path:
+        print("Erreur : -csv <chemin> est requis (univers d'instruments à scanner).")
+        return
+
+    threshold = float(args.get("draw_down", 20))
+    period = args.get("period", "6month")
+    out_path = args.get("out") or _default_out_path(threshold, period)
+
+    display_rows, matched_df = _screen(csv_path, threshold, period)
+
+    if not display_rows:
+        print(f"Aucun instrument avec un drawdown >= {threshold:.1f}% sur {period}.")
+        return
+
+    print(f"\n=== OPPORTUNITÉS EN DRAWDOWN (>= {threshold:.1f}%, période {period}) ===")
+    print(f"{'Ticker':<10} {'Label':<25} {'Drawdown courant':>18} {'Pire drawdown':>16}")
+    for r in display_rows:
+        print(f"{r['ticker']:<10} {r['label']:<25} {r['current_drawdown']:>17.2f}% {r['max_drawdown']:>15.2f}%")
+
+    matched_df.to_csv(out_path, header=False, index=False)
+    print(f"\n{len(matched_df)} ligne(s) exportée(s) vers {out_path}")
+
+
+if __name__ == "__main__":
+    main()
+
+################################################################################
+# Dossier : src/screener
+# Fichier : universe.py
+# Chemin relatif : screener/universe.py
+################################################################################
+
+"""
+src/screener/universe.py
+
+Univers d'instruments à scanner pour repérer des opportunités --
+totalement indépendant de la watchlist (`core.config.load_watchlist`),
+qui elle sert au suivi de ce qui est déjà en portefeuille.
+
+Charge un export CSV type XTB listant tous les instruments tradables
+(pas seulement ceux détenus).
+"""
+from __future__ import annotations
+
+from pathlib import Path
+
+import pandas as pd
+
+# Colonnes de l'export CSV XTB, sans en-tête. C'est aussi l'ordre de colonnes
+# utilisé pour réexporter un sous-ensemble de lignes dans le même format.
+COLUMNS = [
+    "ticker", "label", "currency", "min_lot", "unused",
+    "margin_1", "margin_2", "hours", "days", "asset_class",
+]
+
+# Suffixes XTB (place de cotation encodée dans le ticker) -> Yahoo Finance.
+# Ex : 'CPRI.US' -> 'CPRI', 'HSBA.UK' -> 'HSBA.L'.
+_XTB_TO_YAHOO_SUFFIX = {
+    ".US": "",
+    ".UK": ".L",
+    ".FR": ".PA",
+    ".DE": ".DE",
+    ".NL": ".AS",
+    ".IT": ".MI",
+    ".ES": ".MC",
+    ".PT": ".LS",
+    ".BE": ".BR",
+    ".CH": ".SW",
+    ".DK": ".CO",
+    ".NO": ".OL",
+    ".SE": ".ST",
+    ".FI": ".HE",
+    ".PL": ".WA",
+}
+
+
+def _xtb_ticker_to_yahoo(ticker: str) -> str:
+    if ticker in _TICKER_OVERRIDES:
+        return _TICKER_OVERRIDES[ticker]
+    for xtb_suffix, yahoo_suffix in _XTB_TO_YAHOO_SUFFIX.items():
+        if ticker.endswith(xtb_suffix):
+            return ticker[: -len(xtb_suffix)] + yahoo_suffix
+    return ticker
+
+
+# Tickers pour lesquels la substitution de suffixe générique ne suffit pas :
+# - Nordique (.ST/.CO/.OL) : Yahoo exige un tiret avant la lettre de classe
+#   d'action (ex: 'ERIC-B.ST'), que XTB n'utilise pas ('ERICB.SE').
+# - US : quelques cas où le ticker Yahoo réel diffère du ticker XTB pour
+#   d'autres raisons (classe d'action, notation CFD).
+# Liste non-exhaustive, à compléter au fil des exécutions.
+_TICKER_OVERRIDES = {
+    "ERICB.SE": "ERIC-B.ST",
+    "ASSAB.SE": "ASSA-B.ST",
+    "ATCOA.SE": "ATCO-A.ST",
+    "ATCOB.SE": "ATCO-B.ST",
+    "BETSB.SE": "BETS-B.ST",
+    "CARLB.DK": "CARL-B.CO",
+    "COLOB.DK": "COLO-B.CO",
+    "ELUXB.SE": "ELUX-B.ST",
+    "FINGB.SE": "FING-B.ST",
+    "GETIB.SE": "GETI-B.ST",
+    "HOLMB.SE": "HOLM-B.ST",
+    "HUSQB.SE": "HUSQ-B.ST",
+    "INDUA.SE": "INDU-A.ST",
+    "INVEB.SE": "INVE-B.ST",
+    "KINVB.SE": "KINV-B.ST",
+    "HMB.SE": "HM-B.ST",
+    "ESSITYB.SE": "ESSITY-B.ST",
+    "ALKB.DK": "ALK-B.CO",
+    "GOOGC.US": "GOOG",
+    "BFB.US": "BF-B",
+    "BRKB.US": "BRK-B",
+}
+
+
+def load_universe_csv(path: Path, asset_class: str = "Stock") -> pd.DataFrame:
+    """
+    Charge l'univers depuis un export CSV type XTB, sans en-tête :
+    ticker,nom,devise,lot_min,?,marge1,marge2,horaires,jours,type
+
+    Exemple de ligne :
+    CPRI.US,Capri Holdings Ltd,USD,50,0,0.30%,0.50%,15:30 - 22:00,Mon - Fri,Stock
+
+    - Ne garde que les lignes dont le type == `asset_class` (défaut "Stock").
+    - Ignore les instruments "CLOSE ONLY" (ticker suffixé '*' : encore
+      listés par XTB mais impossible d'y ouvrir une nouvelle position).
+    - Ajoute une colonne `yahoo_ticker` (conversion du ticker XTB, seul
+      format que yfinance sait résoudre) sans toucher à `ticker`, qui reste
+      la valeur XTB d'origine -- nécessaire pour pouvoir réexporter les
+      lignes retenues dans le même format que le CSV d'entrée.
+    """
+    df = pd.read_csv(path, header=None, names=COLUMNS)
+
+    df = df[df["asset_class"] == asset_class]
+    df = df[~df["ticker"].str.endswith("*") & ~df["label"].str.contains("CLOSE ONLY", na=False)]
+    df = df.copy()
+    df["yahoo_ticker"] = df["ticker"].map(_xtb_ticker_to_yahoo)
+
+    return df
+
+################################################################################
+# Dossier : src/storage
+# Fichier : __init__.py
+# Chemin relatif : storage/__init__.py
+################################################################################
+
+
+
+################################################################################
+# Dossier : src/storage
 # Fichier : base.py
-# Chemin relatif : storage\base.py
+# Chemin relatif : storage/base.py
 ################################################################################
 
 from typing import Protocol
@@ -276,9 +670,9 @@ class Cache(Protocol):
     def save(self, symbol: str, df: pd.DataFrame) -> None: ...
 
 ################################################################################
-# Dossier : src\storage
+# Dossier : src/storage
 # Fichier : parquet_cache.py
-# Chemin relatif : storage\parquet_cache.py
+# Chemin relatif : storage/parquet_cache.py
 ################################################################################
 
 from pathlib import Path
@@ -301,17 +695,17 @@ class ParquetCache(Cache):
         df.to_parquet(self._path(symbol))
 
 ################################################################################
-# Dossier : src\visualize
+# Dossier : src/visualize
 # Fichier : __init__.py
-# Chemin relatif : visualize\__init__.py
+# Chemin relatif : visualize/__init__.py
 ################################################################################
 
 
 
 ################################################################################
-# Dossier : src\visualize
+# Dossier : src/visualize
 # Fichier : charts.py
-# Chemin relatif : visualize\charts.py
+# Chemin relatif : visualize/charts.py
 ################################################################################
 
 import plotly.graph_objects as go

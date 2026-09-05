@@ -1,0 +1,2 @@
+[console_scripts]
+dashboard-ingest = ingestion.cli:main
