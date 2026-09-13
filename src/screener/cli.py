@@ -7,7 +7,7 @@ drawdown sur une période donnée, et exporte les lignes retenues dans un
 CSV au même format que le CSV d'entrée.
 
 Usage :
-    python -m screener.cli -csv instruments.csv -draw-down 40 -period 6month
+    python -m src.screener.cli -csv instruments.csv -draw-down 40 -period 6month
 """
 from __future__ import annotations
 
